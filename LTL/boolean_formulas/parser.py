@@ -160,6 +160,62 @@ class ANDExpression(BinExpression):
     def distance(self, label):
         return self.left.distance(label) + self.right.distance(label)
 
+class ALLExpression(Expression):
+    name = "ALL"
+    def __init__(self, inner):
+        self.inner = inner
+        
+    def __repr__(self):
+        return "ALLExpression(%s)" % (str(self.inner))
+
+    def __iter__(self):
+        for expr in itertools.chain([self], self.inner):
+            yield expr
+
+    def check(self, label):
+        for l in label:
+            if self.inner.check(l)==False:
+                return False
+        return True
+
+    def distance(self, label):
+        return sum([self.inner.distance(l) for l in label])
+    def children(self):
+        return [self.inner]
+
+    def nnf(self):
+        self.inner = self.inner.nnf()
+        return self
+
+class SOMEExpression(Expression):
+    name = "SOME"
+    def __init__(self, inner):
+        self.inner = inner
+        
+    def __repr__(self):
+        return "SOMEExpression(%s)" % (str(self.inner))
+
+    def __iter__(self):
+        for expr in itertools.chain([self], self.inner):
+            yield expr
+
+    def check(self, label):
+        for l in label:
+            if self.inner.check(l)==True:
+                return True
+        return False
+
+    def distance(self, label):
+        return min([self.inner.distance(l) for l in label])
+
+    def children(self):
+        return [self.inner]
+
+    def nnf(self):
+        self.inner = self.inner.nnf()
+        return self
+        
+
 class Parser(object):
     def __init__(self, formula):
         lexer = get_lexer()
@@ -196,6 +252,7 @@ class Parser(object):
         else:
             raise Exception("Expected OR, RPAREN or nothing but got %s" % self.tokens[0])
 
+
     def andx(self):
         lhs = self.notx()
         if len(self.tokens) == 0 or self.tokens[0].type in ["OR", "RPAREN"]:
@@ -216,6 +273,12 @@ class Parser(object):
         if self.tokens[0].type == "NOT":
             self.tokens.pop(0)
             return NotExpression(self.parx())
+        elif self.tokens[0].type == "ALL":
+            self.tokens.pop(0)
+            return ALLExpression(self.parx())
+        elif self.tokens[0].type == "SOME":
+            self.tokens.pop(0)
+            return SOMEExpression(self.parx())
         else:
             return self.parx()
 
@@ -239,3 +302,9 @@ class Parser(object):
 def parse(formula):
     parser = Parser(formula)
     return parser.parse()
+
+
+if __name__ == '__main__':
+    import sys
+    p = parse(sys.argv[1])
+    print p
