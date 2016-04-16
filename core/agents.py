@@ -7,10 +7,9 @@ import simulator
 def sat(x,m):
 	return x if abs(x)<m else x/abs(x)*m
 
-class Quad(simulator.ControlledSimObj,simulator.DiscreteSimObj,simulator.DrawableObject,simulator.InteractiveAgent,object):
+class Quad(simulator.ControlledSimObj,simulator.DrawableObject,simulator.InteractiveAgent,object):
 	def __init__(self,name,init_region,env):
 		simulator.ControlledSimObj.__init__(self,env)
-		simulator.DiscreteSimObj.__init__(self)
 		simulator.DrawableObject.__init__(self)
 		simulator.InteractiveAgent.__init__(self)
 
@@ -21,10 +20,7 @@ class Quad(simulator.ControlledSimObj,simulator.DiscreteSimObj,simulator.Drawabl
 		self.goto(elem)
 		self.state = self.env.get_baricenter(elem)
 
-		self.current_action = None
-		self.next_action = None
 		self.planner = None
-		self.planner_state = 0
 
 		self.meas = set([])
 		self.sensors = []
@@ -60,7 +56,7 @@ class Quad(simulator.ControlledSimObj,simulator.DiscreteSimObj,simulator.Drawabl
 	def update_trace(self):
 		self.trace.append(self.get_labels())
 		self.transition_type.append("quad")
-		print "UPDATE TRACE",self.trace
+		#print "UPDATE TRACE",self.trace
 
 	def get_labels(self):
 		return set([self.current_region] + list(self.meas))
@@ -80,12 +76,13 @@ class Quad(simulator.ControlledSimObj,simulator.DiscreteSimObj,simulator.Drawabl
 		trace = self.trace + [self.get_labels()]
 		if self.replan:
 			self.replanner(trace)
-		next_action = self.action(self.planner_state+1)
+		next_action = self.action(self.planner_state)
 		if self.current_action!=next_action:
-			self.planner_state += 1
 			self.current_action = next_action
-			print self.planner_state,self.current_action
+			print self.name," planner[",self.planner_state,"] -> ",self.current_action
+			self.planner_state += 1
 			self.goto(self.current_action)
+
 
 	def check_traces(self,trace):
 		for i,t in enumerate(trace):
@@ -93,44 +90,6 @@ class Quad(simulator.ControlledSimObj,simulator.DiscreteSimObj,simulator.Drawabl
 			if ref_t!=t:
 				return False
 		return True
-
-	# def replanner(self,trace):
-	# 	if self.check_traces(trace)==False:
-	# 		print "\n\n REPLAN \n", self.get_labels()
-	# 		self.ba.update_unobsarvable_model(self.measurement_model,self.prod,trace)
-
-
-	# 		self.ts1.graph['initial'] = set([self.ref_elem])
-	# 		new_init_set = set([])
-	# 		for v in self.measurement_model.graph['initial']:
-	# 			for n in self.measurement_model.neighbors(v):
-	# 				new_init_set.add(n)
-	# 		self.measurement_model.graph['initial'] = new_init_set
-	# 		print "New init set", self.measurement_model.graph['initial']
-
-			
-	# 		self.prod = self.ts1.fts_compose(self.measurement_model)
-	# 		# Add observation
-	# 		for (n,d) in self.prod.nodes(data=True):
-	# 			if n[0]==n[1]:
-	# 				d['label'].add('found')
-	# 			else:
-	# 				d['label'].add('notfound')
-
-	# 		self.prod.graph['symbols'].add('found')
-	# 		self.prod.graph['symbols'].add('notfound')
-	# 		self.ba = self.ltl.fts_product(self.prod)
-	# 		pref,pref_cost,suf,suf_cost= self.ba.dijkstra_plan_networkX(10)
-	# 		pr1 = [p[0][0] for p in pref]
-	# 		su1 = [s[0][0] for s in suf]
-	# 		self.planner = (pr1,su1)
-	# 		self.planner_state = 0
-	# 		self.trace = []
-	# 		pr = [p[0] for p in pref]
-	# 		su = [s[0] for s in suf]
-	# 		self.ref_trace = (self.prod.run_trace(pr),self.prod.run_trace(su))
-
-	# 		print "New plan ",self.planner
 
 	def replanner(self,trace):
 		if self.trace:
@@ -187,3 +146,25 @@ class MeasureProcess(simulator.DiscreteSimObj,simulator.DrawableObject,object):
 
 	def update_measure(self,sim):
 		pass
+
+class CentralizedPlanner(simulator.DiscreteSimObj,object):
+	def __init__(self,obj_list,planner):
+		simulator.DiscreteSimObj.__init__(self)
+		self.obj_list = obj_list
+		self.planner = planner
+		self.planner_state = 0
+		self.goto_next_state()
+
+	def transition_available(self,sim):
+		return all([obj.is_done() for obj in self.obj_list])
+
+	def goto_next_state(self):
+		for obj in self.obj_list:
+			obj.goto(self.action(self.planner_state)[obj.name])
+		self.planner_state+=1
+	def di_sim(self,sim):
+		self.goto_next_state()
+
+	def action(self,i):
+		return self.planner[0][i] if i<len(self.planner[0]) else self.planner[1][(i-len(self.planner[0]))%len(self.planner[1])]
+

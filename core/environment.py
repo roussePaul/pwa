@@ -3,18 +3,25 @@ import numpy as np
 from gui import get_cmap
 import random
 import itertools
+from scipy.spatial import Delaunay, Voronoi, voronoi_plot_2d
 
+import utils
 rect = lambda a,b: [(a[0],a[1]),(a[0],b[1]),(b[0],b[1]),(b[0],a[1])]
 
 class Environment:
 	#vectrices: list of points
 	#elements: [(v1,v2,v3),(v2,v3,...),...] -> must be convex
 	#regions: ["l1","l1","l3"]
-
-	def __init__(self,env):
+	def __init__(self):
 		self.vectrices = []
 		self.elements = []
 		self.regions = []
+		self.colors = None
+
+		self.center = {}
+		self.reach_distance = {}
+
+	def build(self,env):
 		for l,e in env.items():
 			elem = []
 			for n in e:
@@ -25,10 +32,28 @@ class Environment:
 				else:
 					idn = eq.index(True) 
 				elem.append(idn)
+
 			self.elements.append(tuple(elem))
 			self.regions.append(l)
 
+	def build_reachable_set(self):
+		self.center = {}
+		self.reach_distance = {}
+		for elem in self.elements:
+			b = self.get_baricenter(elem)
+			self.center[elem] = b
+			self.reach_distance[elem] = 0.5 *  self.get_distance_to_element(b,elem)
+
+	def get_distance_to_element(self,p,elem):
+		poly = [self.vectrices[e] for e in elem]
+		return utils.distance_to_hull(p,poly)
+
+	def build_color_map(self):
 		self.colors = get_cmap(len(set(self.regions)))
+
+	def is_element_reached(self,p,elem):
+		b = self.center[elem]
+		return np.linalg.norm(p-b)<self.reach_distance[elem]
 
 	def get_point_in_region(self,region):
 		elem = [e for e,r in zip(self.elements,self.regions) if r==region]
@@ -72,10 +97,12 @@ class Environment:
 		for e,r in zip(self.elements,self.regions):
 			pts = [list(self.vectrices[n]) for n in e]
 			if r=="obstacle":
-				print r
 				ax.add_patch(plt.Polygon(pts, closed=True,fill=False,hatch='//'))
 			else:
 				ax.add_patch(plt.Polygon(pts, closed=True,fill=True,color=self.colors(regions[r])))
+				p = self.center[e]
+				r = self.reach_distance[e]
+				ax.add_patch(plt.Circle(p,radius=r,facecolor='none',edgecolor='k'))
 
 		for r in set(self.regions):
 			p = self.get_point_in_region(r)
@@ -83,3 +110,54 @@ class Environment:
 
 
 		return ax
+
+class DelaunayEnvironment(Environment):
+	def __init__(self,points,area,labels):
+		Environment.__init__(self)
+		
+		self.area = area
+		self.area_hull = Delaunay(area)
+		self.points = points
+		self.regions = labels
+
+		self.get_voronoi()
+		self.build_color_map()
+		self.build_reachable_set()	
+	def add_symmetric(self):
+		sym = []
+		a = list(self.area)
+		for u,v in zip(a,a[1:]+a[0:1]):
+			d = (u-v)
+			n = np.array([d[1],-d[0]])
+			n = n/np.linalg.norm(n)
+			sym += [p-2*n*(np.dot(n,p-u)) for p in self.points]
+		self.points = np.array(list(self.points) + sym)
+	
+	def get_voronoi(self):
+		self.add_symmetric()
+		vor = Voronoi(self.points)
+		index_inside_vectrices = set([])
+		for i,v in enumerate(vor.vertices):
+			if self.in_area(v):
+				index_inside_vectrices.add(i)
+		elements = []
+		for r in vor.regions:
+			if r and set(r).issubset(index_inside_vectrices):
+				elements.append(r)
+		
+		index_inside_vectrices = list(index_inside_vectrices)
+		reindex = {n:i for i,n in enumerate(index_inside_vectrices)}
+
+		vectrices = [vor.vertices[n] for n in index_inside_vectrices]
+		
+		elements = [tuple([reindex[n] for n in e]) for e in elements]
+
+		self.elements = elements
+		self.vectrices = vectrices
+
+	def in_area(self,p):
+		return self.area_hull.find_simplex(p)>=0
+
+if __name__ == '__main__':
+	area = np.array(rect([-1,-1],[1,1]))
+	DelaunayEnvironment()

@@ -42,5 +42,6 @@ class GUI:
 		return self.ax_obj,
 
 	def start(self):
+		plt.axis('equal')
 		plt.show()
 		self.sim.stop = True

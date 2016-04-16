@@ -37,6 +37,7 @@ class Simulator(threading.Thread):
 			i = sp.get_id_sync_done()
 			sp.reset_sync(i)
 			if i!=None:
+				print "SYNC pool ", [obj.name for obj in sp.obj_pool]
 				for obj in sp.obj_pool:
 					obj.di_sim(self)
 		for obj in self.get_class_obj(InteractiveAgent):
@@ -94,7 +95,7 @@ class ControlledSimObj(ContinuousSimObj):
 		self.ref_point = self.env.get_baricenter(to_elem)
 
 	def is_done(self):
-		return np.linalg.norm(self.ref_point-self.state)<0.2
+		return self.env.is_element_reached(self.state,self.ref_elem)
 
 	def cont_sim(self,dt):
 		d = np.linalg.norm(self.ref_point-self.state)
@@ -112,6 +113,7 @@ class ControlledSimObj(ContinuousSimObj):
 		edges = [(u,v,{'weight':1.0}) for u,v in E]
 
 		symbols = set(self.env.regions)
+		print self.ref_elem
 		fts = FTS(symbols,set([self.ref_elem]))
 
 		fts.add_nodes_from(nodes)
