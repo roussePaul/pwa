@@ -17,6 +17,7 @@ class Simulator(threading.Thread):
 
 		self.sync_pool = []
 		self.time = 0.0
+		self.realtime = True
 
 	def add(self,name,obj):
 		self.obj_list[name] = obj
@@ -60,11 +61,27 @@ class Simulator(threading.Thread):
 		for obj in self.get_class_obj(ContinuousSimObj):
 			obj.init_pos()
 
+	def start_simulation(self,realtime=True):
+		self.realtime = realtime
+		self.start()
+		
 	def run(self):
 		while self.stop == False:
-			self.sim(0.01)
-			time.sleep(0.01)
+			try:
+				self.sim(0.01)
+				if self.realtime:
+					time.sleep(0.01)
+			except KeyboardInterrupt:
+				print "KeyboardInterrupt"
+				self.stop = True
 
+	def wait_for_keyboard_interrupt(self):
+		try:
+			while True:
+				time.sleep(0.5)
+		except KeyboardInterrupt:
+			pass
+		self.stop = True
 # Always simulated
 class ContinuousSimObj:
 	def __init__(self):
@@ -77,48 +94,6 @@ class ContinuousSimObj:
 		self.state += self.u*dt
 		self.env.get_region(self.state)
 
-
-def sat(x,m):
-	return x if abs(x)<m else x/abs(x)*m
-
-class ControlledSimObj(ContinuousSimObj):
-	def __init__(self,env):
-		ContinuousSimObj.__init__(self)
-		self.speed = 3.0
-		self.env = env
-		self.ref_point = np.array([1,1])
-		self.ref_elem = random.choice(self.env.elements)
-		self.goto(self.ref_elem)
-
-	def goto(self,to_elem):
-		self.ref_elem = to_elem
-		self.ref_point = self.env.get_baricenter(to_elem)
-
-	def is_done(self):
-		return self.env.is_element_reached(self.state,self.ref_elem)
-
-	def cont_sim(self,dt):
-		d = np.linalg.norm(self.ref_point-self.state)
-		if d<1e-6:
-			return self.state*0
-		n = (self.ref_point-self.state)/d
-		self.u = sat(d,1)*self.speed*n
-
-		ContinuousSimObj.cont_sim(self,dt)
-
-	def get_FTS(self):
-		nodes = [(e,{'label':set([r]),'weight':1.0}) for e,r in zip(self.env.elements,self.env.regions)]
-		L = self.env.elements
-		E = list(itertools.permutations(L,2)) + [(l,l) for l in L]
-		edges = [(u,v,{'weight':1.0}) for u,v in E]
-
-		symbols = set(self.env.regions)
-		print self.ref_elem
-		fts = FTS(symbols,set([self.ref_elem]))
-
-		fts.add_nodes_from(nodes)
-		fts.add_edges_from(edges)
-		return fts
 
 # Subject to synchronization
 class DiscreteSimObj:

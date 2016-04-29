@@ -15,7 +15,7 @@ class ProdAut(DiGraph):
 				for t_ts_node in self.graph['ts'].successors_iter(f_ts_node):
 					for t_buchi_node in self.graph['buchi'].successors_iter(f_buchi_node):
 							t_prod_node = self.composition(t_ts_node, t_buchi_node)
-							label = self.graph['ts'].node[f_ts_node]['label']
+							label = self.graph['ts'].node[t_ts_node]['label']
 							cost = self.graph['ts'][f_ts_node][t_ts_node]['weight']
 							truth, dist = check_label_for_buchi_edge(self.graph['buchi'], label, f_buchi_node, t_buchi_node)
 							total_weight = cost + self.graph['alpha']*dist

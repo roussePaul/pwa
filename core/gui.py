@@ -18,16 +18,23 @@ class GUI:
 	def __init__(self,env,sim):
 		self.env = env
 		self.sim = sim
-		self.rate = 25
+		self.rate = 1
 
 		self.fig = plt.figure()
 
+		self.fig.canvas.mpl_connect('close_event', self.handle_close)
+		self.fig.canvas.mpl_connect('button_press_event', self.onclick)
 		self.ax_env = env.plot(plt)
 		self.ax_obj, = plt.plot([0],[0],"ro")
 
+		self.anim = animation.FuncAnimation(self.fig, self.redraw,self.rate, fargs=None,interval=1000.0/self.rate, blit=False)
 
-		self.anim = animation.FuncAnimation(self.fig, self.redraw, 25, fargs=None,interval=50, blit=False)
+	def onclick(self,event):
+		print "region",self.env.get_elem([event.xdata, event.ydata])
 
+	def handle_close(self,evt):
+		print('Closed Figure!')
+		self.sim.stop = True
 
 	def redraw(self,d):
 		pts = []
@@ -42,6 +49,10 @@ class GUI:
 		return self.ax_obj,
 
 	def start(self):
-		plt.axis('equal')
-		plt.show()
+		try:
+			plt.axis('equal')
+			plt.show()
+		except KeyboardInterrupt:
+			pass
+		print "Gui Stopped"
 		self.sim.stop = True

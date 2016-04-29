@@ -1,9 +1,12 @@
 import networkx as nx
 import numpy as np
-from gui import get_cmap
+if __name__ != '__main__':
+	from gui import get_cmap
 import random
 import itertools
 from scipy.spatial import Delaunay, Voronoi, voronoi_plot_2d
+from matplotlib import pyplot as plt
+import math
 
 import utils
 rect = lambda a,b: [(a[0],a[1]),(a[0],b[1]),(b[0],b[1]),(b[0],a[1])]
@@ -60,14 +63,14 @@ class Environment:
 		if len(elem)>0:
 			return self.get_baricenter(random.choice(elem))
 		else:
-			print "Region not found"
+			print "Region",region," not found"
 
 	def get_elem_in_region(self,region):
 		elem = [e for e,r in zip(self.elements,self.regions) if r==region]
 		if len(elem)>0:
 			return random.choice(elem)
 		else:
-			print "Region not found"
+			print "Region",region,"not found"
 
 	def get_region(self,p):
 		x = np.array(p)
@@ -77,6 +80,15 @@ class Environment:
 			d.append((np.linalg.norm(x-y),r))
 		d,r =  min(d, key=lambda x:x[0])
 		return r
+
+	def get_elem(self,p):
+		x = np.array(p)
+		d = []
+		for elem,r in zip(self.elements,self.regions):
+			y = self.get_baricenter(elem)
+			d.append((np.linalg.norm(x-y),r,elem))
+		d,r,elem =  min(d, key=lambda x:x[0])
+		return elem
 
 	def get_region_from_elem(self,elem):
 		return self.regions[self.elements.index(elem)]
@@ -105,11 +117,20 @@ class Environment:
 				ax.add_patch(plt.Circle(p,radius=r,facecolor='none',edgecolor='k'))
 
 		for r in set(self.regions):
-			p = self.get_point_in_region(r)
-			ax.text(p[0], p[1], r, fontsize=15,horizontalalignment='center',verticalalignment='center',bbox={'facecolor':'white', 'alpha':0.5, 'pad':1, 'edgecolor':'none'})
-
+			print r
+			try:
+				p = self.get_point_in_region(r)
+				ax.text(p[0], p[1], r, fontsize=15,horizontalalignment='center',verticalalignment='center',bbox={'facecolor':'white', 'alpha':0.5, 'pad':1, 'edgecolor':'none'})
+			except TypeError,e:
+				template = "An exception of type {0} occured. Arguments:\n{1!r}"
+				message = template.format(type(ex).__name__, ex.args)
+				print message,p,r
 
 		return ax
+
+	def show(self):
+		self.plot(plt)
+		plt.show()
 
 class DelaunayEnvironment(Environment):
 	def __init__(self,points,area,labels):
@@ -123,6 +144,7 @@ class DelaunayEnvironment(Environment):
 		self.get_voronoi()
 		self.build_color_map()
 		self.build_reachable_set()	
+
 	def add_symmetric(self):
 		sym = []
 		a = list(self.area)
@@ -158,6 +180,29 @@ class DelaunayEnvironment(Environment):
 	def in_area(self,p):
 		return self.area_hull.find_simplex(p)>=0
 
+class MonotoneEnvironment(Environment):
+	def __init__(self,monotone_system):
+		Environment.__init__(self)
+		
+		self.elements = [tuple([e[0],e[1],e[3],e[2]]) for e in monotone_system.elements]
+		self.vectrices = monotone_system.vectrices
+		self.regions = [str(i) for i in range(len(self.elements))]
+
+		self.build_color_map()
+		self.build_reachable_set()	
+
 if __name__ == '__main__':
 	area = np.array(rect([-1,-1],[1,1]))
-	DelaunayEnvironment()
+	r = 0.3
+	a = 0.5*r
+	b = math.sqrt(3)/2*r
+	X1 = np.arange(-1,1,2*b)
+	X2 = np.arange(b-1,1,2*b)
+	Y1 = np.arange(-1,1,2*a)
+	Y2 = np.arange(a-1,1,2*a)
+	pts1 = np.dstack(np.meshgrid(X1, Y1)).reshape(-1, 2)
+	pts2 = np.dstack(np.meshgrid(X2, Y2)).reshape(-1, 2)
+	pts = np.concatenate((pts1,pts2),axis=0)
+
+	labels = ["a"]*pts.shape[0]
+	env = DelaunayEnvironment(pts,area,labels)

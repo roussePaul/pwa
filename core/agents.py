@@ -3,13 +3,17 @@ import random
 import itertools
 from automata import *
 import simulator
+import controller
+import time
 
 def sat(x,m):
 	return x if abs(x)<m else x/abs(x)*m
 
-class Quad(simulator.ControlledSimObj,simulator.DrawableObject,simulator.InteractiveAgent,object):
+class Quad(simulator.ContinuousSimObj,simulator.DrawableObject,simulator.InteractiveAgent,object):
+#class Quad(controller.ControlledSimObj,simulator.DrawableObject,simulator.InteractiveAgent,object):
 	def __init__(self,name,init_region,env):
-		simulator.ControlledSimObj.__init__(self,env)
+		#controller.ControlledSimObj.__init__(self)
+		simulator.ContinuousSimObj.__init__(self)
 		simulator.DrawableObject.__init__(self)
 		simulator.InteractiveAgent.__init__(self)
 
@@ -17,7 +21,8 @@ class Quad(simulator.ControlledSimObj,simulator.DrawableObject,simulator.Interac
 		self.init_region = init_region
 		self.env = env
 		elem = self.env.get_elem_in_region(self.init_region)
-		self.goto(elem)
+		self.u = np.array([0,0])
+		#self.goto(elem)
 		self.state = self.env.get_baricenter(elem)
 
 		self.planner = None
@@ -168,3 +173,37 @@ class CentralizedPlanner(simulator.DiscreteSimObj,object):
 	def action(self,i):
 		return self.planner[0][i] if i<len(self.planner[0]) else self.planner[1][(i-len(self.planner[0]))%len(self.planner[1])]
 
+class MonotonePlanner(simulator.DiscreteSimObj,object):
+	def __init__(self,quad,monotone_system,fts):
+		simulator.DiscreteSimObj.__init__(self)
+		self.fts = fts
+		self.monotone_system = monotone_system
+		self.period = 0.1
+		self.quad = quad
+		self.last_time = 0.0
+		self.fts_state = self.init_state()
+
+		self.control = nx.get_node_attributes(self.fts,"apply_control")
+
+	def init_state(self):
+		cell = self.monotone_system.get_cell(self.quad.state)
+		for n in self.fts.graph['initial']:
+			if cell==n[0]:
+				return n
+
+	def get_next_state(self):
+		cell = self.monotone_system.get_cell(self.quad.state)
+		for n in self.fts.successors(self.fts_state):
+			if cell==n[0]:
+				return n
+
+	def transition_available(self,sim):
+		return sim.time-self.last_time>=self.period
+
+	def di_sim(self,sim):
+		self.last_time = sim.time
+
+		self.fts_state = self.get_next_state()
+		self.quad.u = self.control[self.fts_state]
+		print self.quad.u, self.fts_state
+		print sim.time
