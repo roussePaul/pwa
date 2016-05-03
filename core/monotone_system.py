@@ -132,20 +132,37 @@ class MonotoneSystem():
 
 
 	def is_loop_fair(self,controls):
-		c = [-1, 4]
-		A = [[-3, 1], [1, 2]]
-		b = [6, 4]
-		x0_bounds = (None, None)
-		x1_bounds = (-3, None)
-		res = linprog(c, A_ub=A, b_ub=b, bounds=(x0_bounds, x1_bounds),
-		              options={"disp": True})
+		for u in controls:
+			if np.all(u==0):
+				return False
+		A = np.transpose(np.array(controls))
+		(M,N) = A.shape
+		c = -np.ones(N)
+		b = np.zeros((M,1))
+		eps = 1e-4
+		res = linprog(c, A_eq=A, b_eq=b, bounds=tuple([(eps,1.0)]*N))
+		return not res['success']
 
-		print res
+	def is_graph_fair(self,graph):
+		control_dict = nx.get_node_attributes(graph,'control')
+		for cycle in nx.simple_cycles(graph):
+			controls = [control_dict[n] for n in cycle]
+			if self.is_loop_fair(controls) == False:
+				return False
+		return True
 
+def test_linprog():
+	controls= [np.array([1,0]),np.array([-1,0]),np.array([0,1])]
+	A = np.transpose(np.array(controls))
+	(M,N) = A.shape
+	c = -np.ones(N)
+	b = np.zeros((M,1))
+	eps = 1e-4
+	res = linprog(c, A_eq=A, b_eq=b, bounds=tuple([(eps,1.0)]*N))
+	print res
+	print res['success']
 
-
-
-if __name__ == '__main__':
+def test_monotone_system():
 	import matplotlib.pyplot as plt
 	mesh = MonotoneSystem()
 	mesh.rectangular_mesh((-3,-3),(3,3),(10,10))
@@ -174,3 +191,6 @@ if __name__ == '__main__':
 	ax.set_ylim([-3,3])
 
 	plt.show()
+
+if __name__ == '__main__':
+	test_linprog()

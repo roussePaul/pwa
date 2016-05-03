@@ -42,7 +42,7 @@ class Automaton(DiGraph):
 	def __init__(self,*args,**kargs):
 		DiGraph.__init__(self,*args,**kargs)
 
-	def show(self,name,colors={}):
+	def show(self,name,colors={},edges_color={}):
 		A=to_agraph(self)
 		try:
 			if 'accept' in self.graph:
@@ -62,6 +62,12 @@ class Automaton(DiGraph):
 				node.attr['color'] = c
 				node.attr['style'] = 'filled'
 				print n,c
+			for n,c in edges_color.items():
+				node = A.get_edge(*n)
+				node.attr['color'] = c
+				node.attr['penwidth'] = 2
+				print n,c
+
 		except Exception,e:
 			print "Error on printing graph: ",e
 		src = Source(A)
@@ -802,7 +808,7 @@ class BA(Automaton):
 	def remove_ambiguites(self):
 		remove_edges = []
 		for u in self.nodes():
-			labelled_edges = fts.get_labelled_successors(u)
+			labelled_edges = self.get_labelled_successors(u)
 			for l,succ in labelled_edges.items():
 				if u in succ and any([u[0]==v[0] and u!=v for v in succ]):
 					if u in self.graph['accept']:
@@ -815,6 +821,62 @@ class BA(Automaton):
 			if len(self[t[0]][t[1]]['label'])==0:
 				self.remove_edge(*t)
 
+
+	def backward_reachability_plan(self,system):
+
+		accepted_set = self.graph['accept']
+
+		generate_predecessor_set = lambda controls,node_set: [(controls,{u:l}) for u,v,d in self.in_edges(data=True) if u not in node_set and v in node_set for l in d['label']]
+
+		to_visit = collections.deque(generate_predecessor_set(set([(a,None) for a in accepted_set]),accepted_set))
+
+		visited_states = []
+
+		control_dict = {str(u):u for u in inputs}
+
+		while to_visit:		
+			e = to_visit.pop()
+			accepted_control,initial_set = e
+			accepted_set = set([x[0] for x in accepted_control])
+			visited_states.append(e)
+			print "\n||||||||||||||||||||||||"
+			print initial_set
+			print accepted_set
+
+			if accepted_set.intersection(self.graph['initial']):
+				break
+			it = DijkstraFixedPoint(self,[initial_set],accepted_set)
+
+			# iter until we find the fix point
+			for done,nodes in  it:
+				print done	
+				if done:
+					break
+			
+			outgoing_edges = [(u,v) for u,l in nodes.items() for v in self.get_labelled_successors(u)[l] if v in accepted_set]
+			need_fairness = not any([u[0]==v[0]])
+			print outgoing_edges,need_fairness
+
+			controls = [control_dict[l] for l in nodes.values()]
+			fair_control = system.is_loop_fair(controls)
+			if fair_control or need_fairness==False:
+				print "Add fair loop",nodes
+				X = accepted_control.union(set(nodes.items()))
+				Y =  generate_predecessor_set(X,[x[0] for x in X])
+
+				not_visited_states = []
+				for y in Y:
+					if y not in visited_states:
+							not_visited_states.append(y)
+
+				to_visit.extend(not_visited_states)
+			else:
+				print "Unfair loop",nodes
+
+			if set(nodes.keys()).intersection(self.graph['initial']) and set(nodes.keys()).intersection(self.graph['accept']):
+				print "Path to initial_set found!!!!"
+		return
+
 # parcours de tous les fix point en BFS avec commme depht le nombre de noeuds du fix point
 # initial_set = [{n1:l1,n2:l2, ...},...]
 class DijkstraFixedPoint:
@@ -825,7 +887,7 @@ class DijkstraFixedPoint:
 		self.accepted_set = copy.deepcopy(accepted_set)
 
 
-	def iter_fix_point_set(self):
+	def iter_fix_point_set(self,max_size=10):
 		if len(self.set_to_visit)==0:
 			raise StopIteration()
 
@@ -833,12 +895,17 @@ class DijkstraFixedPoint:
 		F = self.set_to_visit.pop()
 
 		nF = {k:[v] for k,v in F.items()}
+		new_size_of_fp = len(nF)
 		for u,lu in F.items():
 			labelled_edges = self.automaton.get_labelled_successors(u)
 			succ = labelled_edges[lu]
 			for s in succ:
 				if (s not in nF) and (s not in self.accepted_set):
 					nF[s] = list(self.automaton.get_successor_labels(s))
+					new_size_of_fp = len(nF)
+					if new_size_of_fp>max_size:
+						return False,F
+
 
 		newF = self.expand_successor_set(nF)
 		if F in newF:
@@ -852,6 +919,8 @@ class DijkstraFixedPoint:
 
 	def expand_successor_set(self,nF):
 		sF = []
+		# import operator
+		# size = reduce(operator.mul, [len(v) for v in nF.values()], 1)
 		for conf in itertools.product(*nF.values()):
 			sF.append({k:v for k,v in zip(nF.keys(),conf)})
 		return sF
@@ -861,6 +930,15 @@ class DijkstraFixedPoint:
 
 	def next(self):
 		return self.iter_fix_point_set()
+
+	def next_fixed_point(self,max_size):
+		fp_found = 0
+		try:
+			while fp_found==False:
+					fp_found,fp = self.iter_fix_point_set(max_size)
+		except StopIteration:
+			return False,None
+		return fp_found,fp
 
 class ControlAutomaton(Automaton):
 	def __init__(self,ba):

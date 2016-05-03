@@ -117,7 +117,6 @@ class Environment:
 				ax.add_patch(plt.Circle(p,radius=r,facecolor='none',edgecolor='k'))
 
 		for r in set(self.regions):
-			print r
 			try:
 				p = self.get_point_in_region(r)
 				ax.text(p[0], p[1], r, fontsize=15,horizontalalignment='center',verticalalignment='center',bbox={'facecolor':'white', 'alpha':0.5, 'pad':1, 'edgecolor':'none'})

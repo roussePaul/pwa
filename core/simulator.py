@@ -82,6 +82,15 @@ class Simulator(threading.Thread):
 		except KeyboardInterrupt:
 			pass
 		self.stop = True
+
+	def simulate(self,t):
+		while self.time<t:
+			self.sim(0.01)
+
+	def plot_all(self,plt):
+		for obj in self.get_class_obj(ContinuousSimObj):
+			obj.plot_trace(plt)
+
 # Always simulated
 class ContinuousSimObj:
 	def __init__(self):
@@ -90,10 +99,19 @@ class ContinuousSimObj:
 
 		self.current_region = None
 
+		self.state_trace = []
+
 	def cont_sim(self,dt):
 		self.state += self.u*dt
 		self.env.get_region(self.state)
 
+
+		self.state_trace.append(self.state.copy())
+
+	def plot_trace(self,plt):
+		t = np.array(self.state_trace)
+		plt.plot(t[:,0],t[:,1],'b')
+		plt.plot(t[:,0],t[:,1],'r.',markersize=1.5)
 
 # Subject to synchronization
 class DiscreteSimObj:
