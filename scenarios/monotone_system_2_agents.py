@@ -20,28 +20,31 @@ from matplotlib import pyplot as plt
 
 import pickle
 
-def init(filename="save/save.dat",show_env=False):
+def init(filename="save/save.dat",mesh=None,fts=None):
 
-	mesh = MonotoneSystem(out_state=True)
-	N = 7
-	mesh.rectangular_mesh((0,0),(1,1),(N,N))
-	a = 0.2
-	inputs = [np.array([0,0]),np.array([a,0]),np.array([-a,0]),np.array([0,a]),np.array([0,-a])]
-	inputs = [np.array([0,0]),np.array([a,0]),np.array([-a,0]),np.array([0,a]),np.array([0,-a]),np.array([a,a]),np.array([a,-a]),np.array([-a,a]),np.array([-a,-a]),]
+	if not mesh and not fts:
+		mesh = MonotoneSystem(out_state=True)
+		N = 4
+		mesh.rectangular_mesh((0,0,0,0),(1,1,1,1),(N,N,N,N))
+		a = 0.5
+		single_agent_input = [np.array([0,0]),np.array([a,0]),np.array([-a,0]),np.array([0,a]),np.array([0,-a])]
+		#single_agent_input = [np.array([0,0]),np.array([a,a]),np.array([-a,a]),np.array([a,-a]),np.array([-a,-a])]
+		inputs = [np.concatenate((u,v)) for u,v in itertools.product(single_agent_input,repeat=2)]
 
-	print inputs
-	print "Abstraction..."
+		print "Abstraction..."
 
-	b = 0.2
-	noise = [np.array([-b,-b]),np.array([b,b])]
+		b = 0.05
+		noise = [np.array([-b,-b,-b,-b]),np.array([b,b,b,b])]
+		fts = mesh.compute_FTS(inputs,noise)
 
-	init_elem = list(mesh.collision(np.array([0.0,0.0]),np.array([1,0.3])))
-	final_elem = list(mesh.collision(np.array([0.6,0.6]),np.array([1,1])))
-	collision = list(mesh.collision(np.array([0.5,0.5]),np.array([0.51,0.51])))
+	init_elem = list(mesh.collision(np.array([0,0,0.9,0]),np.array([0.1,0.1,1.0,0.1])))
+	final_elem = list(mesh.collision(np.array([0.9,0.9,0.1,0.1]),np.array([1.0,1.0,0.2,0.2])))
 
 	init = random.choice(init_elem)
- 
-	print final_elem
+	fts.graph['initial'] = set(init_elem)
+	print set(init_elem)
+	print set(final_elem)
+
 	#fts.show("lkjlkj")
 
 	env = MonotoneEnvironment(mesh)
@@ -51,46 +54,41 @@ def init(filename="save/save.dat",show_env=False):
 			env.regions[i] = "i"
 		if elem in final_elem:
 			env.regions[i] = "f"
-		if elem in collision:
-			env.regions[i] = "c"
 	regions = env.regions+[mesh.out]
 
 	labels = {elem:set([r]) for elem,r in  zip(states,regions)}
 
-	env.show_reg = ["i","f","c"]
-	if show_env:
-		env.show()
-		return
+	print labels.values()
 
-	fts = mesh.compute_FTS(inputs,noise)
-	fts.graph['initial'] = set(init_elem)
+	for elem in mesh.elements:
+		x = mesh.vectrices[elem[0]]
+		if np.all(x[:2]==x[2:]):
+			labels[elem].add("collision")
 
 	nx.set_node_attributes(fts,'label',labels)
 	nx.set_edge_attributes(fts,'weight',{e:1.0 for e in  fts.edges()})
 
+	env.show_reg = ["i","f","c"]
+
+
 
 	print "Product..."
-	ltl = BA(formula="([]!out) && ([]!c)&& ([]<>f) && ([]<>i) ")
-	#ltl.show("ltl")
+	ltl = BA(formula="([]!out) && ([]<>f) && ([]<>i)")
 	ba = ltl.undeterministic_fts_product(fts,verbose=1)
 	
 	print "Minimize..."
 	ba.minimize()
 
 	#ba.show("buchi")
-	print ba.graph['accept']
 
 	print "Plan..."
 	t = time.time()
-
-	print "Accepted state size", len(ba.nodes())
-	plan = ba.backward_reachability(mesh,inputs,show_dfs=False,verbose=0,max_fixed_point_size=4,environment=None,plt=plt)
+	plan = ba.backward_reachability(mesh,inputs,show_dfs=False,verbose=0,max_fixed_point_size=4)
 
 	if plan == None:
 		return
 
 	#plan.show("plan")
-
 	# plan2 = copy.copy(plan)
 	# set_node = set([u for e in plan2.edges() for u in e if (e[0] in plan2.graph['initial']) or (e[1] in plan2.graph['initial'])])
 	# plan2.remove_nodes_from(set(plan2.nodes()).difference(set_node))
@@ -105,11 +103,17 @@ def init(filename="save/save.dat",show_env=False):
 	print init
 	init_state = env.get_baricenter(init)
 	
+	x1 = init_state[:2]
+	x2 = init_state[2:]
 
-	q1 = MonotoneQuad("q1",init_state)
+	print init,init_state,x1,x2
 
+	q1 = MonotoneQuad("q1",x1)
+	q2 = MonotoneQuad("q2",x2)
 
-	planner = MonotonePlanner(q1,mesh,plan,verbose=0)
+	prod_sys = ProductSystem([q1,q2])
+
+	planner = MonotonePlanner(prod_sys,mesh,plan,verbose=0)
 
 	controller = ControlAutomaton(copy.copy(mesh),copy.copy(plan))
 	controller.save("plans/"+os.path.splitext(__file__)[0]+"_plan.p")
@@ -117,22 +121,21 @@ def init(filename="save/save.dat",show_env=False):
 	sim = Simulator()
 
 	sim.add("q1",q1)
+	sim.add("q2",q2)
 	sim.add("planner",planner)
 
+	env_plot = GridEnvironment(N,N,[0,1,0,1])
+
 	save_file = open(filename,"wb")
-	save_list = [env,mesh,fts,planner,env]
+	save_list = [env,mesh,fts,planner,env_plot]
 	with open(filename, "wb") as f:
 		pickle.dump(save_list,save_file)
 
-	return sim,env
+	return sim,env_plot
 
 if __name__ == '__main__':
 	
 	command = sys.argv[1:]
-
-	if "show" in command:
-		init(show_env=True)
-
 
 	filename = "save/"+os.path.splitext(__file__)[0]+"_plan.p"
 	if "generate" in command:
@@ -149,7 +152,8 @@ if __name__ == '__main__':
 		env = env_plot
 
 		sim = Simulator()
-		sim.add(planner.system.name,planner.system)
+		for q in planner.system.quads:
+			sim.add(q.name,q)
 		sim.add("planner",planner)
 
 	if "gui" in command:
@@ -163,5 +167,3 @@ if __name__ == '__main__':
 		env.plot(plt)
 		sim.plot_all(plt)
 		plt.show()
-	elif "controls" in command:
-		planner.show_controls(plt,env)

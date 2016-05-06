@@ -1,5 +1,6 @@
 import threading
 import time
+import sys
 
 from automata import *
 from agents import *
@@ -83,13 +84,25 @@ class Simulator(threading.Thread):
 			pass
 		self.stop = True
 
-	def simulate(self,t):
+	def simulate(self,t,show_progress=False):
+		progress_time = 0.0
 		while self.time<t:
-			self.sim(0.01)
+			try:
+				self.sim(0.01)
+			except:
+				return
+			if show_progress and self.time-progress_time>1.0:
+				sys.stdout.write(str(self.time)+'\r')
+				sys.stdout.flush()
+				progress_time = self.time
 
 	def plot_all(self,plt):
+		colors = ['r','b','c']
+		i = 0
 		for obj in self.get_class_obj(ContinuousSimObj):
-			obj.plot_trace(plt)
+			c = colors[i]
+			i=(i+1)%len(colors)
+			obj.plot_trace(plt,color=c)
 
 # Always simulated
 class ContinuousSimObj:
@@ -102,30 +115,36 @@ class ContinuousSimObj:
 		self.state_trace = []
 
 	def cont_sim(self,dt):
-		self.state += self.u*dt
-		self.env.get_region(self.state)
-
+		b = 0.2*np.random.uniform(low=-1,high=1,size=2) * np.array([1,1])
+		self.state += (self.u + b)*dt
 
 		self.state_trace.append(self.state.copy())
 
-	def plot_trace(self,plt):
+	def plot_trace(self,plt,color='b'):
 		t = np.array(self.state_trace)
-		plt.plot(t[:,0],t[:,1],'b')
-		plt.plot(t[:,0],t[:,1],'r.',markersize=1.5)
+		plt.plot(t[:,0],t[:,1],color)
+		plt.plot(t[:,0],t[:,1],'r.',markersize=0.5)
+
+	def get_state(self):
+		return self.state
+
+	def set_control(self,u):
+		self.u = u
 
 # Subject to synchronization
 class DiscreteSimObj:
 	def __init__(self):
-		self.notice = lambda : None
+		self.notice = None
 		self.need_notice = False
 
 	@abstractmethod
 	def transition_available(self):
-		pass
+		pass 
 
 	def manage_notification(self,sim):
 		if self.need_notice:
-			self.notice()
+			if self.notice:
+				self.notice()
 			self.need_notice = False
 
 class DrawableObject:

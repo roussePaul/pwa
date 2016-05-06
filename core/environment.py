@@ -23,6 +23,7 @@ class Environment:
 
 		self.center = {}
 		self.reach_distance = {}
+		self.show_reg = []
 
 	def build(self,env):
 		for l,e in env.items():
@@ -38,6 +39,7 @@ class Environment:
 
 			self.elements.append(tuple(elem))
 			self.regions.append(l)
+		self.show_reg = self.regions
 
 	def build_reachable_set(self):
 		self.center = {}
@@ -52,7 +54,11 @@ class Environment:
 		return utils.distance_to_hull(p,poly)
 
 	def build_color_map(self):
-		self.colors = get_cmap(len(set(self.regions)))
+		s = set(self.regions)
+		func = get_cmap(len(s))
+		L = range(len(s))
+		random.shuffle(L)
+		self.colors = {r:func(i) for i,r in zip(L,s)}
 
 	def is_element_reached(self,p,elem):
 		b = self.center[elem]
@@ -94,13 +100,15 @@ class Environment:
 		return self.regions[self.elements.index(elem)]
 		
 	def get_baricenter(self,elem):
-		x = np.array([0.0,0.0])
+		x = 0.0*self.vectrices[elem[0]]
 		for n in elem:
 			x += self.vectrices[n]
 		return x / len(elem)
 
 
 	def plot(self,plt):
+		self.build_color_map()
+
 		v = np.array(self.vectrices)
 		elements = 	np.array([list(e) for e in self.elements])
 		region_colors = list(itertools.chain.from_iterable([[r]*len(e) for r,e in zip(self.regions,self.elements)]))
@@ -108,18 +116,22 @@ class Environment:
 		ax = plt.gca()
 		for e,r in zip(self.elements,self.regions):
 			pts = [list(self.vectrices[n]) for n in e]
-			if r=="obstacle":
-				ax.add_patch(plt.Polygon(pts, closed=True,fill=False,hatch='//'))
+			if r=="c":
+				ax.add_patch(plt.Polygon(pts, closed=True,fill=False,hatch='//',lw=0))
+			elif r in self.show_reg:
+				ax.add_patch(plt.Polygon(pts, closed=True,fill=True,color=self.colors[r]))
+				if e in self.center:
+					p = self.center[e]
+					r = self.reach_distance[e]
+					ax.add_patch(plt.Circle(p,radius=r,facecolor='none',edgecolor='k'))
 			else:
-				ax.add_patch(plt.Polygon(pts, closed=True,fill=True,color=self.colors(regions[r])))
-				p = self.center[e]
-				r = self.reach_distance[e]
-				ax.add_patch(plt.Circle(p,radius=r,facecolor='none',edgecolor='k'))
+				ax.add_patch(plt.Polygon(pts, closed=True,fill=False))
 
 		for r in set(self.regions):
 			try:
-				p = self.get_point_in_region(r)
-				ax.text(p[0], p[1], r, fontsize=15,horizontalalignment='center',verticalalignment='center',bbox={'facecolor':'white', 'alpha':0.5, 'pad':1, 'edgecolor':'none'})
+				if r in self.show_reg:
+					p = self.get_point_in_region(r)
+					ax.text(p[0], p[1], r, fontsize=15,horizontalalignment='center',verticalalignment='center',bbox={'facecolor':'white', 'alpha':0.5, 'pad':1, 'edgecolor':'none'})
 			except TypeError,e:
 				template = "An exception of type {0} occured. Arguments:\n{1!r}"
 				message = template.format(type(ex).__name__, ex.args)
@@ -130,6 +142,35 @@ class Environment:
 	def show(self):
 		self.plot(plt)
 		plt.show()
+
+
+	def plot_controls(self,plt,control_nodes,bs,scale=0.1,color='k',offset=np.array([0,0])):
+		nodes = [n[0] for n in control_nodes.keys() if n[1]==bs]
+
+		ax = plt.axes()
+		for n,u in control_nodes.items():
+			fs = n[0]
+			start = self.get_baricenter(fs) + offset
+			if u!=None:
+				if np.all(u==0):
+					ax.add_patch(plt.Circle((start[0],start[1]), radius=scale, color=color, fill=True))
+				else:
+					x = scale * u/np.linalg.norm(u)
+					ax.arrow(start[0], start[1], x[0],x[1], head_width=0.01, head_length=0.02, fc=color, ec=color)
+			else:
+				ax.add_patch(plt.Rectangle((start[0],start[1]),0.03,0.03,facecolor=color,edgecolor=color))
+
+	def show_controls(self,plt,nodes,filename):
+		buchi_states = sorted(set([n[1] for n in nodes.keys()]))
+		plt.clf()
+		self.plot(plt)
+		color = ['b','r','k','c']
+		for i,bs in enumerate(buchi_states):
+			c = color[i%len(color)]
+			print bs,"\t",c
+			self.plot_controls(plt,nodes,bs,scale=0.1,color=c)
+		plt.savefig(filename)
+
 
 class DelaunayEnvironment(Environment):
 	def __init__(self,points,area,labels):
@@ -183,12 +224,26 @@ class MonotoneEnvironment(Environment):
 	def __init__(self,monotone_system):
 		Environment.__init__(self)
 		
-		self.elements = [tuple([e[0],e[1],e[3],e[2]]) for e in monotone_system.elements]
+		self.elements = [tuple([e[0],e[1],e[3],e[2]])+e[4:] for e in monotone_system.elements]
 		self.vectrices = monotone_system.vectrices
 		self.regions = [str(i) for i in range(len(self.elements))]
 
 		self.build_color_map()
-		self.build_reachable_set()	
+
+class GridEnvironment:
+	def __init__(self,n,m,area):
+		self.n = n
+		self.m = m
+		self.area = area
+
+	def plot(self,plt):
+		ax = plt.gca()
+		for x in np.linspace(self.area[0],self.area[1],self.n):
+			ax.plot([x,x],[self.area[2],self.area[3]],'k')
+		for y in np.linspace(self.area[2],self.area[3],self.m):
+			ax.plot([self.area[0],self.area[1]],[y,y],'k')
+	def get_elem(self,p):
+		print "Not implemented",p
 
 if __name__ == '__main__':
 	area = np.array(rect([-1,-1],[1,1]))

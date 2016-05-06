@@ -18,6 +18,7 @@ import networkx as nx
 from networkx.drawing.nx_agraph import to_agraph
 
 import collections
+from sortedcontainers import SortedList
 
 def compute_path_from_pre(pre, target):
 	#print 'pre: %s with size %i' %(pre, len(pre))
@@ -43,6 +44,38 @@ class Automaton(DiGraph):
 		DiGraph.__init__(self,*args,**kargs)
 
 	def show(self,name,colors={},edges_color={}):
+		A=to_agraph(self)
+		try:
+			for n,d in self.nodes(data=True):
+				node = A.get_node(n)
+				if 'label' in d:
+					node.attr['label'] = str(n) + "\n" + str(d['label'])
+			for n,c in colors.items():
+				node = A.get_node(n)
+				node.attr['fillcolor'] = c
+				node.attr['style'] = 'filled'
+
+			for n,c in edges_color.items():
+				node = A.get_edge(*n)
+				node.attr['color'] = c
+				node.attr['penwidth'] = 2
+
+			if 'accept' in self.graph:
+				for n in self.graph['accept']:
+					node = A.get_node(n)
+					node.attr['peripheries'] = 2
+					
+			for n in self.graph['initial']:
+				node = A.get_node(n)
+				node.attr['penwidth'] = 2
+
+		except Exception,e:
+			print "Error on printing graph: ",e
+		src = Source(A)
+		src.format = 'png'
+		src.render("test-output/"+name,view=True)
+
+	def compact_show(self,name,colors={},edges_color={}):
 		A=to_agraph(self)
 		try:
 			if 'accept' in self.graph:
@@ -263,6 +296,10 @@ class BA(Automaton):
 				for t_ts_node in fts.successors_iter(f_ts_node):
 					for t_buchi_node in self.successors_iter(f_buchi_node):
 							t_prod_node = self.composition(result,fts,t_ts_node, t_buchi_node)
+							if ((t_ts_node in fts.graph['initial']) and (t_buchi_node in self.graph['initial'])):
+								result.graph['initial'].add(t_prod_node)
+							if (t_buchi_node in self.graph['accept']):
+								result.graph['accept'].add(t_prod_node)
 							# Meng one: label = fts.node[f_ts_node]['label']
 							label = fts.node[t_ts_node]['label']
 							cost = fts[f_ts_node][t_ts_node]['weight']
@@ -273,14 +310,21 @@ class BA(Automaton):
 								result.add_edge(f_prod_node, t_prod_node, weight=total_weight)
 		return result
 
-	def undeterministic_fts_product(self,fts):
+	def undeterministic_fts_product(self,fts,verbose=0):
 		result = BA()
 
 		node_edge_labels = {u:list(set(itertools.chain(*[l['label'] for l in fts[u].values()]))) for u in fts.nodes()}
 		edge_labels = {u:[(l,[v for v,k in fts[u].iteritems() if l in k['label']]) for l in node_edge_labels[u]] for u in fts.nodes()}
 		removed_labels = {}
 
+
+		N_nodes = len(fts.nodes())
+		i_node = 0
 		for f_ts_node in fts.nodes_iter():
+			i_node +=1
+			if verbose:
+				sys.stdout.write(str(i_node)+"/" + str(N_nodes)+'\r')
+				sys.stdout.flush()
 			for f_buchi_node in self.nodes_iter():
 				f_prod_node = self.composition(result,fts,f_ts_node, f_buchi_node)
 				if f_prod_node not in removed_labels:
@@ -310,6 +354,11 @@ class BA(Automaton):
 										new_label = new_label.union(result[f_prod_node][t_prod_node]['label'])
 										new_control.update(result[f_prod_node][t_prod_node]['control'])
 									result.add_edge(f_prod_node, t_prod_node, weight=total_weight,label=new_label,control=new_control)
+
+									if ((t_ts_node in fts.graph['initial']) and (t_buchi_node in self.graph['initial'])):
+										result.graph['initial'].add(t_prod_node)
+									if (t_buchi_node in self.graph['accept']):
+										result.graph['accept'].add(t_prod_node)
 						else:
 							for t_ts_node in successor:
 								t_prod_node = self.composition(result,fts,t_ts_node, t_buchi_node)
@@ -391,13 +440,6 @@ class BA(Automaton):
 
 	def composition(self, result, fts, ts_node, buchi_node):
 		prod_node = (ts_node, buchi_node)
-		if not self.has_node(prod_node):
-			result.add_node(prod_node, ts=ts_node, buchi=buchi_node, marker='unvisited')
-			if ((ts_node in fts.graph['initial']) and
-				(buchi_node in self.graph['initial'])):
-				result.graph['initial'].add(prod_node)
-			if (buchi_node in self.graph['accept']):
-				result.graph['accept'].add(prod_node)
 		return prod_node
 
 	def dijkstra_plan_networkX(self, beta=10):
@@ -821,85 +863,217 @@ class BA(Automaton):
 			if len(self[t[0]][t[1]]['label'])==0:
 				self.remove_edge(*t)
 
+	def generate_all_predecessor_set(self,node_set): 
+		return [{u:l}  for n in node_set for u,v,d in self.in_edges(n,data=True) if u not in node_set for l in d['label']]
 
-	def backward_reachability_plan(self,system):
-
+	def backward_reachability(self,system,inputs,show_dfs=False,verbose=0,max_fixed_point_size=4,environment=None,plt=None):
 		accepted_set = self.graph['accept']
 
-		generate_predecessor_set = lambda controls,node_set: [(controls,{u:l}) for u,v,d in self.in_edges(data=True) if u not in node_set and v in node_set for l in d['label']]
-
-		to_visit = collections.deque(generate_predecessor_set(set([(a,None) for a in accepted_set]),accepted_set))
-
-		visited_states = []
+		initial_state_found = False
+		accepted_set_circled = False
 
 		control_dict = {str(u):u for u in inputs}
 
-		while to_visit:		
-			e = to_visit.pop()
-			accepted_control,initial_set = e
+		initial_control_set = set([(a,None) for a in accepted_set])
+		initial_accepted_set = accepted_set
+		initial_fixed_point_iterator = DijkstraFixedPoint(self,self.generate_all_predecessor_set(initial_accepted_set),initial_accepted_set)
+
+		to_visit = collections.deque([(initial_control_set,initial_fixed_point_iterator)])
+
+		iter_loop = 0
+		while to_visit and not (initial_state_found and accepted_set_circled):
+			e = to_visit[-1]
+
+			accepted_control,fixed_point_iterator = e
 			accepted_set = set([x[0] for x in accepted_control])
-			visited_states.append(e)
-			print "\n||||||||||||||||||||||||"
-			print initial_set
-			print accepted_set
 
-			if accepted_set.intersection(self.graph['initial']):
-				break
-			it = DijkstraFixedPoint(self,[initial_set],accepted_set)
+			if verbose==2:
+				print " "*len(to_visit) + "| iter "+str(len(to_visit))
 
-			# iter until we find the fix point
-			for done,nodes in  it:
-				print done	
-				if done:
-					break
+
+			if verbose==1:
+				pass
+
+
+			found,nodes = fixed_point_iterator.next_fixed_point(max_fixed_point_size)
 			
-			outgoing_edges = [(u,v) for u,l in nodes.items() for v in self.get_labelled_successors(u)[l] if v in accepted_set]
-			need_fairness = not any([u[0]==v[0]])
-			print outgoing_edges,need_fairness
+			if not found:
+				if len(to_visit)>1:
+					to_visit.pop()
+				else:
+					print "No solution found"
+					return
 
-			controls = [control_dict[l] for l in nodes.values()]
-			fair_control = system.is_loop_fair(controls)
-			if fair_control or need_fairness==False:
-				print "Add fair loop",nodes
-				X = accepted_control.union(set(nodes.items()))
-				Y =  generate_predecessor_set(X,[x[0] for x in X])
+			iter_loop += 1
 
-				not_visited_states = []
-				for y in Y:
-					if y not in visited_states:
-							not_visited_states.append(y)
+			if found:
+				#print "."*len(accepted_set) + "|"*len(nodes)
 
-				to_visit.extend(not_visited_states)
+				outgoing_edges = [(u,v) for u,l in nodes.items() for v in self.get_labelled_successors(u)[l] if v in accepted_set]
+				#need_fairness = not all([u[0]==v[0] for u,v in outgoing_edges])
+				need_fairness = not all([any([v[0]==u[0] for v in self.get_labelled_successors(n)[l] if (v in accepted_set) and v!=u]) for n,l in nodes.items() for u in self.get_labelled_successors(n)[l] if u not in accepted_set])
+				if verbose==3:
+					print "Need Fairness:",need_fairness
+
+					if need_fairness:
+						print "!!!!!!!!!!!!!!!!!!", iter_loop
+				controls = [control_dict[l] for l in nodes.values()]
+
+				sG = nx.DiGraph()
+				# convert = {n:i for i,n in enumerate(nodes.keys())}
+				# edges = []
+				keep_edges = [(u,v)for u,l in nodes.items() if l!=None for v in self.get_labelled_successors(u)[l]]
+				sG = nx.DiGraph(self.subgraph(nodes.keys()))
+				sG.remove_edges_from(set(sG.edges()).difference(set(keep_edges)))
+
+				try:
+					nx.set_node_attributes(sG,'control',{n:control_dict[l] for n,l in nodes.items() if n in sG.nodes()})
+				except KeyError:
+					print sG.edges()
+					print nodes.keys()
+					raise KeyError
+
+				# check if accepted states are accessible from every nodes:
+				# print nx.is_strongly_connected(sG),self.subgraph(nodes.keys()).edges()
+				if nx.is_strongly_connected(sG)==False:
+					continue
+
+				if verbose==2:
+					print sG.edges(data=True)
+				
+				#fair_control = system.is_loop_fair(controls)
+				fair_control = system.is_graph_fair(sG)
+
+				if fair_control or need_fairness==False:
+					if verbose==2:
+						print "need_fairness",need_fairness,"fair_control",fair_control,[str(c) for c in controls]
+						print "Add fair loop",nodes
+					X = accepted_control.union(set(nodes.items()))
+					node_set = [x[0] for x in X]
+					Y =  self.generate_all_predecessor_set(node_set)
+					it = DijkstraFixedPoint(self,Y,node_set)
+
+					to_visit.append((X,it))
+
+				else:
+					if verbose==2:
+						print "Unfair loop",controls
+
+				new_set = accepted_set.union(set(nodes.keys()))
+				if self.graph['initial'].issubset(new_set):
+					initial_state_found = True
+					if verbose==2:
+						print "Path to initial_set found!!!!"
+
+				cycle_accept_set = [(u,l) for u in self.graph['accept'] for l,succ in self.get_labelled_successors(u).items() if set(succ).issubset(new_set)]
+
+				if environment:
+					soluce = accepted_control.union(set(nodes.items()))
+					print soluce
+					node_controls = {n:(control_dict[l] if l else None) for n,l in soluce}
+					environment.show_controls(plt,node_controls,"automaton/iter"+str(iter_loop)+".png")
+
+					print "Accept cycle",len(cycle_accept_set),"Initial set found",self.graph['initial'].issubset(new_set)
+					
+				if cycle_accept_set and self.graph['initial'].issubset(new_set):
+					soluce = accepted_control.union(set(nodes.items()))
+					print "Solution found!!!"
+					print sG.edges()
+					break
+
+				if verbose==0:
+					sys.stdout.write(str(len(accepted_set)) +"/" +str(len(nodes)) + "\t" + str(iter_loop)+'\r')
+					sys.stdout.flush()
+
+
+				if show_dfs:
+					c = {n:"red" for n in accepted_set}
+					c.update({n:"green" for n in nodes})
+					ec = {e:"red" for e in [(u,v) for u,l in accepted_control if l!=None for v in self.get_labelled_successors(u)[l]]}
+					ec.update( {e:"blue" for e in [(u,v) for u,l in nodes.items() if l!=None for v in self.get_labelled_successors(u)[l]]} )
+					self.show("buchi",colors=c,edges_color=ec)
+					raw_input()
+
+
+		print len(to_visit)
+		if verbose==3:
+			G = copy.deepcopy(self)
+			keep_edges = [(u,v)for u,l in nodes.items() if l!=None for v in self.get_labelled_successors(u)[l]]
+			keep_nodes = [n for e in keep_edges for n in e]
+			print keep_nodes
+			G.remove_nodes_from(list(set(G.nodes()).difference(set(keep_nodes))))
+			G.remove_edges_from(list(set(G.edges()).difference(set(keep_edges))))
+			G.graph['accept'] = G.graph['accept'].intersection(set(keep_nodes))
+			G.graph['initial'] = G.graph['initial'].intersection(set(keep_nodes))
+			c = {n:"red" for n in accepted_set.intersection(set(keep_nodes))}
+			c.update({n:"green" for n in set(nodes.keys()).intersection(set(keep_nodes))})
+			ec = {e:"blue" for e in [(u,v) for u,l in nodes.items() if l!=None for v in self.get_labelled_successors(u)[l]] if e in keep_edges}
+
+			G.show("buchi",colors=c,edges_color=ec)
+
+
+		cycle_accept_set = [(u,l) for u in self.graph['accept'] for l,succ in self.get_labelled_successors(u).items() if set(succ).issubset(new_set)]
+		if verbose==2:
+			print cycle_accept_set
+		solution = {u:l for u,l in soluce}
+		for u,l in cycle_accept_set:
+			solution[u] = l
+		if verbose==2:
+			print solution
+
+
+		plan = copy.deepcopy(self)
+		for n,l in solution.items():
+			plan.remove_labeled_edge_except(n,l)
+		#plan.show("plan_all")
+		plan.remove_ambiguites()
+		plan.minimize()
+
+		# plan.show("plan2")
+		# return 
+
+		if verbose==2:
+			print self.graph['initial']
+
+		nx.set_node_attributes(plan,"apply_control",None)
+		control = nx.get_node_attributes(plan,"apply_control")
+		for n in plan.nodes():
+			c = list(plan.get_successor_labels(n))
+			if len(c)==0:
+				print "Control not found:", n, s
 			else:
-				print "Unfair loop",nodes
+				s = c[0]
+				if len(c)!=1:
+					print "Too many controls",n,c
+					s = c[0] 
+			control[n] = control_dict[s]
 
-			if set(nodes.keys()).intersection(self.graph['initial']) and set(nodes.keys()).intersection(self.graph['accept']):
-				print "Path to initial_set found!!!!"
-		return
+		nx.set_node_attributes(plan,"apply_control",control)
 
+		return plan
 # parcours de tous les fix point en BFS avec commme depht le nombre de noeuds du fix point
 # initial_set = [{n1:l1,n2:l2, ...},...]
 class DijkstraFixedPoint:
 	def __init__(self, automaton, initial_set, accepted_set):
-		self.automaton = copy.deepcopy(automaton)
-		self.initial_set = copy.deepcopy(initial_set)
-		self.set_to_visit = self.initial_set
-		self.accepted_set = copy.deepcopy(accepted_set)
-
+		self.automaton = automaton
+		self.set_to_visit = SortedList(initial_set,key= lambda d: -len(d))
+		self.accepted_set = accepted_set
 
 	def iter_fix_point_set(self,max_size=10):
 		if len(self.set_to_visit)==0:
 			raise StopIteration()
 
-		self.sort_set()
 		F = self.set_to_visit.pop()
 
 		nF = {k:[v] for k,v in F.items()}
 		new_size_of_fp = len(nF)
+		reach_accepted_set = False
 		for u,lu in F.items():
 			labelled_edges = self.automaton.get_labelled_successors(u)
 			succ = labelled_edges[lu]
 			for s in succ:
+				if s in self.accepted_set:
+					reach_accepted_set = True
 				if (s not in nF) and (s not in self.accepted_set):
 					nF[s] = list(self.automaton.get_successor_labels(s))
 					new_size_of_fp = len(nF)
@@ -910,12 +1084,10 @@ class DijkstraFixedPoint:
 		newF = self.expand_successor_set(nF)
 		if F in newF:
 			newF.remove(F)
-		self.set_to_visit = self.set_to_visit + newF
-		self.sort_set()
-		return len(newF)==0,F
+		self.set_to_visit.update(newF)
+		accept_fix_point = (len(newF)==0) and reach_accepted_set
+		return accept_fix_point,F
 
-	def sort_set(self):
-		self.set_to_visit = sorted(self.set_to_visit,key= lambda d: -len(d))
 
 	def expand_successor_set(self,nF):
 		sF = []
@@ -936,37 +1108,7 @@ class DijkstraFixedPoint:
 		try:
 			while fp_found==False:
 					fp_found,fp = self.iter_fix_point_set(max_size)
+					#print "#"*len(fp)
 		except StopIteration:
 			return False,None
 		return fp_found,fp
-
-class ControlAutomaton(Automaton):
-	def __init__(self,ba):
-		Automaton.__init__(self,type="pouet", initial=set([]), accept=set([]), symbols=set([]))
-		for n in ba.nodes():
-			for ln,succ in ba.get_labelled_successors(n).items():
-				self.add_edges_from([((n,ln),(s,ls)) for s in succ for ls in ba.get_successor_labels(s)])
-		accepted = []
-		for n in ba.graph['accept']:
-			labels = ba.get_successor_labels(n)
-			for l in labels:
-				accepted.append((n,l))
-		initial = []
-		for n in ba.graph['initial']:
-			labels = ba.get_successor_labels(n)
-			for l in labels:
-				initial.append((n,l))
-		self.graph['accept'] = set(accepted)
-		self.graph['initial'] = set(initial)
-
-	def get_least_fixed_point_going_to(self,u,accepted_set):
-		S = set([u])
-		old_S = set([])
-		while S!=old_S:
-			old_S = S
-			S = S.union()
-	def plan(self,accepted_set):
-		for n in accepted_set:
-			nodes = [u for u,v in self.in_edges(n) if u not in accepted_set]
-			for u in nodes:
-				self.get_least_fixed_point_going_to(u,accepted_set)

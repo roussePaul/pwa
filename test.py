@@ -1,16 +1,11 @@
-import networkx as nx
-import matplotlib.pyplot as plt 
+import readline
 
-G = nx.MultiDiGraph()
+def completer(text, state):
+    options = [i for i in commands if i.startswith(text)]
+    if state < len(options):
+        return options[state]
+    else:
+        return None
 
-G.add_edges_from([
-    (1, 2),
-    (3, 2)
-])
-
-plt.figure(figsize=(8,8))
-nx.draw(G)
-
-print nx.has_path(G,1,3)
-print nx.has_path(G,3,1)
-plt.show()
+readline.parse_and_bind("tab: complete")
+readline.set_completer(completer)

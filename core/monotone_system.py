@@ -20,6 +20,8 @@ class MonotoneSystem():
 		self.out_state = out_state
 		self.out = "out"
 
+		self.inputs = None
+
 	def rectangular_mesh(self,xmin,xmax,points):
 		self.area = [xmin,xmax]
 
@@ -37,7 +39,7 @@ class MonotoneSystem():
 		epsilon = 1e-4
 		t = list(itertools.product(*[[0,d] for d in dx]))
 		t = [np.array(list(x)) for x in t]
-		print t
+
 		elem_normals = []
 		for i in range(n):
 			norm = [0]*n
@@ -65,7 +67,7 @@ class MonotoneSystem():
 			except TypeError,ex:
 				template = "An exception of type {0} occured. Arguments:\n{1!r}"
 				message = template.format(type(ex).__name__, ex.args)
-				print message
+				#print message
 
 		self.elements = list(element)
 		self.vectrices = list(vectrices)
@@ -97,22 +99,23 @@ class MonotoneSystem():
 				#print "Out",self.area[0],"<",xmin,",",xmax,"<=",self.area[1]
 		return colliding_elements
 
-	def find_next_cells(self,x,u):
+	def find_next_cells(self,x,u,noise):
 		new_cell = []
-		for e in [x[0],x[-1]]:
+		for e,b in zip([x[0],x[-1]],noise):
 			v = self.vectrices[e]
 
-			w = v + u
+			w = v + 0.1*(u + b)
 			new_cell.append(w)
 		return self.collision(new_cell[0],new_cell[-1])
 
-	def compute_FTS(self,input_space_partition):
+	def compute_FTS(self,input_space_partition,noise = [0,0]):
+		self.inputs = input_space_partition
 		G = automata.FTS()
 		for j,u in enumerate(input_space_partition):
-			print j,u
+			print "Process input",j,":",u
 			edges = set([])
 			for i,x in enumerate(self.elements):
-				next_elem = self.find_next_cells(x,u)
+				next_elem = self.find_next_cells(x,u,noise)
 				for n in next_elem:
 					edges.add((x,n))
 
@@ -143,13 +146,57 @@ class MonotoneSystem():
 		res = linprog(c, A_eq=A, b_eq=b, bounds=tuple([(eps,1.0)]*N))
 		return not res['success']
 
+	def is_system_fair(self,controls):
+		A = np.array(controls)
+		M,N = A.shape
+		eps = 1e-10
+
+		solutions = []
+		in_cone = []
+		for h in itertools.combinations(A,N-1):
+			l = h+(0.0*h[0],)
+			a = np.concatenate(tuple([np.array([j]) for j in l]),axis=0)
+
+			w,v = np.linalg.eig(a)
+
+			null_eig_val = np.abs(w)<eps
+			n_zero_eig = np.count_nonzero(null_eig_val)
+
+			id_null = np.where(np.abs(w)<eps)
+	 		n_indep_null_eig = np.linalg.matrix_rank(v[:,id_null[0]])
+
+			if n_zero_eig==0:
+				raise Exception("We should find at least one eigen value equal to zero")
+			if n_indep_null_eig>1:
+				print "More than one eigenvalue equal to zero"
+				print "Matrice of the plans:",a
+				print "Eigen values:",w
+				print "Eigen vectors:",v
+				continue
+
+			idv = id_null[0][0]
+			line_kernel = np.array([v[:,idv]])
+			ker = line_kernel[0]
+			if not np.all(ker.imag==0):
+				raise Exception("imaginary part not null!",ker)
+			s = ker.real
+			solutions.append(s)
+			solutions.append(-s)
+
+			sol = [s,-s]
+			for c in sol:
+				if np.all(np.dot(A,c.T)<=eps):
+					return True
+
+		return False
 	def is_graph_fair(self,graph):
 		control_dict = nx.get_node_attributes(graph,'control')
 		for cycle in nx.simple_cycles(graph):
 			controls = [control_dict[n] for n in cycle]
-			if self.is_loop_fair(controls) == False:
+			if self.is_system_fair(controls) == False:
 				return False
 		return True
+
 
 def test_linprog():
 	controls= [np.array([1,0]),np.array([-1,0]),np.array([0,1])]

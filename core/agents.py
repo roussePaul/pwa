@@ -111,6 +111,75 @@ class Quad(simulator.ContinuousSimObj,simulator.DrawableObject,simulator.Interac
 			self.planner_state = 0
 
 			print "New plan ",pref,suf
+			
+class MonotoneQuad(simulator.ContinuousSimObj,simulator.DrawableObject,simulator.InteractiveAgent,object):
+#class Quad(controller.ControlledSimObj,simulator.DrawableObject,simulator.InteractiveAgent,object):
+	def __init__(self,name,init_position):
+		#controller.ControlledSimObj.__init__(self)
+		simulator.ContinuousSimObj.__init__(self)
+		simulator.DrawableObject.__init__(self)
+		simulator.InteractiveAgent.__init__(self)
+
+		self.name = name
+
+		self.u = np.array([0,0])
+		self.state = init_position
+
+		self.planner = None
+
+		self.meas = set([])
+		self.sensors = []
+
+		self.replan = False
+
+		self.current_region = None
+
+		self.trace = []
+		self.transition_type = []
+		self.ref_trace = ([],[])
+
+		self.ba = None
+		self.measurement_model = None
+		self.ts1 = None
+		self.prod = None
+		self.ltl = None
+
+		self.dst_state = []
+
+	def update_pos(self,sim):
+		pass
+
+	def update_measure(self,sim):
+		self.meas.clear()
+		for m in self.sensors:
+			self.meas.add(m.measure(sim))
+
+	def update_trace(self):
+		self.trace.append(self.get_labels())
+		self.transition_type.append("quad")
+		#print "UPDATE TRACE",self.trace
+
+	def get_labels(self):
+		return set([])
+
+	def notice_measurement_transition(self):
+		self.trace.append(self.get_labels())
+		self.transition_type.append("meas")
+		print "NOTICE TRACE",self.trace
+
+	def transition_available(self,sim):
+		return self.is_done()
+
+	def action(self,i):
+		return self.planner[0][i] if i<len(self.planner[0]) else self.planner[1][(i-len(self.planner[0]))%len(self.planner[1])]
+
+	def check_traces(self,trace):
+		for i,t in enumerate(trace):
+			ref_t = self.ref_trace[0][i] if i<len(self.ref_trace[0]) else self.ref_trace[1][(i-len(self.ref_trace[0]))%len(self.ref_trace[1])]
+			if ref_t!=t:
+				return False
+		return True
+
 
 class Measure:
 	def __init__(self,callback):
@@ -174,28 +243,32 @@ class CentralizedPlanner(simulator.DiscreteSimObj,object):
 		return self.planner[0][i] if i<len(self.planner[0]) else self.planner[1][(i-len(self.planner[0]))%len(self.planner[1])]
 
 class MonotonePlanner(simulator.DiscreteSimObj,object):
-	def __init__(self,quad,monotone_system,fts):
+	def __init__(self,system,monotone_system,fts,verbose=0):
 		simulator.DiscreteSimObj.__init__(self)
 		self.fts = fts
 		self.monotone_system = monotone_system
 		self.period = 0.1
-		self.quad = quad
+		self.system = system
 		self.last_time = 0.0
 		self.fts_state = self.init_state()
 
 		self.control = nx.get_node_attributes(self.fts,"apply_control")
 
+		self.verbose = verbose
+		self.name = "planner"
+
 	def init_state(self):
-		cell = self.monotone_system.get_cell(self.quad.state)
+		cell = self.monotone_system.get_cell(self.system.get_state())
 		for n in self.fts.graph['initial']:
 			if cell==n[0]:
 				return n
 
 	def get_next_state(self):
-		cell = self.monotone_system.get_cell(self.quad.state)
+		cell = self.monotone_system.get_cell(self.system.get_state())
 		for n in self.fts.successors(self.fts_state):
 			if cell==n[0]:
 				return n
+		print cell,self.fts.successors(self.fts_state)
 
 	def transition_available(self,sim):
 		return sim.time-self.last_time>=self.period
@@ -204,6 +277,52 @@ class MonotonePlanner(simulator.DiscreteSimObj,object):
 		self.last_time = sim.time
 
 		self.fts_state = self.get_next_state()
-		self.quad.u = self.control[self.fts_state]
-		print self.quad.u, self.fts_state
-		print sim.time
+		if self.fts_state:
+			self.system.set_control( self.control[self.fts_state] )
+			if self.verbose:
+				print self.system.u, self.fts_state
+				print sim.time
+		else:
+			print "No fts state!!"
+
+
+	def get_buchi_states(self):
+		return set([n[1] for n in self.fts.nodes()])
+
+	def plot_controls(self,plt,env,bs,scale=0.1,color='k',offset=np.array([0,0])):
+		nodes = [n[0] for n in self.fts.nodes() if n[1]==bs]
+
+		ax = plt.axes()
+		for fs in nodes:
+			u = self.control[(fs,bs)]
+			start = env.get_baricenter(fs) + offset
+			if np.all(u==0):
+				Circle((start[0],start[1]), radius=scale, color='g', fill=True)
+			else:
+				x = scale * u/np.linalg.norm(u)
+				ax.arrow(start[0], start[1], x[0],x[1], head_width=0.01, head_length=0.02, fc=color, ec=color)
+
+	def show_controls(self,plt,env):
+		env.plot(plt)
+		color = ['b','r','k','c']
+		for i,bs in enumerate(self.get_buchi_states()):
+			print bs,"\t",color[i]
+			self.plot_controls(plt,env,bs,scale=0.1,color=color[i])
+		plt.show()
+
+
+
+class ProductSystem:
+	def __init__(self,quads):
+		self.quads = quads
+		self.n = len(quads)
+		self.u = None
+
+	def get_state(self):
+		return np.concatenate(tuple([q.get_state() for q in self.quads]))
+
+	def set_control(self,u):
+		self.u = u
+		controls = list(np.reshape(u,(self.n,2)))
+		for q,c in zip(self.quads,controls):
+			q.set_control(c)
